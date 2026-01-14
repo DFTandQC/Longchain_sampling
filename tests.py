@@ -301,11 +301,11 @@ class TestConfigLoading(unittest.TestCase):
         """Test that unified config has correct spacing hierarchy."""
         # The unified config should exist and contain all presets
         base_dir = Path(__file__).parent
-        unified = base_dir / "unified_config.json"
+        config_file = base_dir / "config.json"
         
-        self.assertTrue(unified.exists(), f"unified_config.json not found at {unified}")
+        self.assertTrue(config_file.exists(), f"config.json not found at {config_file}")
         
-        with open(unified) as f:
+        with open(config_file) as f:
             config = json.load(f)
         
         # Verify presets exist

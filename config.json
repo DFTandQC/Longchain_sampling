@@ -1,6 +1,6 @@
 {
   "description": "Unified multi-molecule cluster sampling configuration with multiple presets",
-  "comment": "Select your preset below or create a custom configuration. Use: python main.py --config unified_config.json --preset balanced --nseeds 100",
+  "comment": "Select your preset below or create a custom configuration. Use: python main.py --config config.json --nseeds 100",
   
   "_presets": {
     "balanced": {
@@ -63,9 +63,9 @@
   },
 
   "_usage_examples": {
-    "balanced_default": "python main.py --config unified_config.json --nseeds 100",
-    "compact_tight": "python main.py --config unified_config.json --dmin 4.0 --dmax 8.0 --lateral 1.0 --nseeds 100",
-    "loose_dispersed": "python main.py --config unified_config.json --dmin 10.0 --dmax 15.0 --lateral 3.0 --nseeds 100",
-    "custom_parameters": "python main.py --config unified_config.json --dmin 5.0 --dmax 9.0 --lateral 1.5 --nseeds 50"
+    "balanced_default": "python main.py --config config.json --nseeds 100",
+    "compact_tight": "python main.py --config config.json --dmin 4.0 --dmax 8.0 --lateral 1.0 --nseeds 100",
+    "loose_dispersed": "python main.py --config config.json --dmin 10.0 --dmax 15.0 --lateral 3.0 --nseeds 100",
+    "custom_parameters": "python main.py --config config.json --dmin 5.0 --dmax 9.0 --lateral 1.5 --nseeds 50"
   }
 }
