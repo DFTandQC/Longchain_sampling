@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
 """
-Comprehensive unit tests for the sampling engine improvements.
+Unified Test Suite for Sampling Engine
 
-Tests cover:
-1. Head direction robustness (fallback mechanisms)
-2. Heteroatom selection generalization (O→N→S→all)
-3. Adaptive distance scaling by molecule radius
-4. Configuration loading and defaults
-5. Constraint generation with mixed molecules
+Combines all test-related modules:
+1. test_configurations.py - Configuration comparison tool
+2. test_improvements.py - Unit tests for core improvements
+3. test_molecule_support.py - Molecule type support tests
+
+This file serves as the single source of truth for all test activities.
+
+USAGE:
+  Unit tests:        python tests.py
+  Quick config test: python tests.py --quick-config
+  Molecule tests:    python tests.py --molecules
+  Full comparison:   python tests.py --full-comparison
 """
 
 import unittest
 import numpy as np
 import json
 import tempfile
-from pathlib import Path
+import subprocess
 import sys
+from pathlib import Path
+from typing import Tuple, List, Optional
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -31,6 +39,10 @@ from lib.sampling import (
 )
 from lib.config import ClusterConfig
 
+
+# ============================================================================
+# PART 1: UNIT TESTS (from test_improvements.py)
+# ============================================================================
 
 class TestHeadRobustness(unittest.TestCase):
     """Test robust head direction with fallback mechanisms."""
@@ -398,7 +410,268 @@ class TestIntegration(unittest.TestCase):
         # Compute radii (should not crash)
         radii = compute_molecule_radii(molecules)
         self.assertEqual(len(radii), 4)
+
+
+# ============================================================================
+# PART 2: MOLECULE SUPPORT TESTS (from test_molecule_support.py)
+# ============================================================================
+
+class TestMoleculeSupport(unittest.TestCase):
+    """Molecule type support verification tests."""
+    
+    def test_H2SO4_oxygen_containing(self):
+        """Test H2SO4 (oxygen-containing molecule)."""
+        elems = np.array(['H', 'S', 'O', 'O', 'O', 'O'])
+        X = np.array([
+            [0.0,  0.0,  1.0],
+            [0.0,  0.0, -0.5],
+            [0.96, 0.0, -0.8],
+            [-0.96, 0.0, -0.8],
+            [0.0,  0.96, -0.8],
+            [0.0, -0.96, -0.8],
+        ], dtype=float)
         
+        # Get head atoms
+        head_idx = get_head_atoms_priority(elems)
+        head_atoms = elems[head_idx]
+        
+        # Should select O atoms
+        self.assertTrue(all(a == 'O' for a in head_atoms))
+        
+        # Calculate head point
+        head_pt = head_point_from_atoms(elems, X, head_idx)
+        self.assertEqual(len(head_pt), 3)
+        
+        # Get constraint atoms
+        constraint_idx = pick_nearest_O_indices(elems, X, head_pt, k=2)
+        self.assertEqual(len(constraint_idx), 2)
+        
+    def test_H2O_oxygen_containing(self):
+        """Test H2O (simple oxygen-containing molecule)."""
+        elems = np.array(['O', 'H', 'H'])
+        X = np.array([
+            [0.0,  0.0,  0.0],
+            [0.95, 0.0,  0.0],
+            [-0.24, 0.92, 0.0],
+        ], dtype=float)
+        
+        head_idx = get_head_atoms_priority(elems)
+        self.assertTrue(all(elems[head_idx] == 'O'))
+        
+    def test_NH3_nitrogen_containing(self):
+        """Test NH3 (nitrogen-containing, no oxygen)."""
+        elems = np.array(['N', 'H', 'H', 'H'])
+        X = np.array([
+            [0.0,  0.0,  0.0],
+            [0.93, 0.0,  0.0],
+            [-0.47, 0.81, 0.0],
+            [-0.47, -0.81, 0.0],
+        ], dtype=float)
+        
+        head_idx = get_head_atoms_priority(elems)
+        self.assertTrue(all(elems[head_idx] == 'N'))
+        
+    def test_H2S_sulfur_containing(self):
+        """Test H2S (sulfur-containing, no oxygen or nitrogen)."""
+        elems = np.array(['S', 'H', 'H'])
+        X = np.array([
+            [0.0,  0.0,  0.0],
+            [1.33, 0.0,  0.0],
+            [-0.34, 1.29, 0.0],
+        ], dtype=float)
+        
+        head_idx = get_head_atoms_priority(elems)
+        self.assertTrue(all(elems[head_idx] == 'S'))
+        
+    def test_CH4_hydrocarbon(self):
+        """Test CH4 (pure hydrocarbon, no heteroatoms)."""
+        elems = np.array(['C', 'H', 'H', 'H', 'H'])
+        X = np.array([
+            [0.0,  0.0,  0.0],
+            [0.63, 0.63, 0.63],
+            [-0.63, -0.63, 0.63],
+            [-0.63, 0.63, -0.63],
+            [0.63, -0.63, -0.63],
+        ], dtype=float)
+        
+        head_idx = get_head_atoms_priority(elems)
+        # Should select all atoms (no heteroatoms)
+        self.assertEqual(len(head_idx), len(elems))
+        
+    def test_priority_O_over_N(self):
+        """Test that O has priority over N."""
+        elems = np.array(['C', 'O', 'N', 'H', 'H'])
+        X = np.random.randn(5, 3) * 0.5
+        
+        head_idx = get_head_atoms_priority(elems)
+        self.assertTrue(all(elems[head_idx] == 'O'))
+
+
+# ============================================================================
+# PART 3: CONFIGURATION COMPARISON TOOL (from test_configurations.py)
+# ============================================================================
+
+class ConfigurationComparison:
+    """Configuration comparison tool with subprocess management."""
+    
+    # Define parameter sets to test
+    TEST_CONFIGS = {
+        "compact": {
+            "description": "Tight molecules (紧凑)",
+            "params": {
+                "dmin": 4.0,
+                "dmax": 8.0,
+                "lateral": 1.0,
+                "jitter_deg": 20.0
+            }
+        },
+        "balanced": {
+            "description": "Balanced spacing (平衡)",
+            "params": {
+                "dmin": 6.0,
+                "dmax": 10.0,
+                "lateral": 2.0,
+                "jitter_deg": 25.0
+            }
+        },
+        "loose": {
+            "description": "Loose molecules (分散)",
+            "params": {
+                "dmin": 10.0,
+                "dmax": 15.0,
+                "lateral": 3.0,
+                "jitter_deg": 25.0
+            }
+        }
+    }
+    
+    @staticmethod
+    def run_test(config_name: str, params: dict, nseeds: int = 10) -> bool:
+        """Run sampling with given parameters."""
+        print(f"\n{'='*70}")
+        print(f"Testing: {config_name.upper()} - {ConfigurationComparison.TEST_CONFIGS[config_name]['description']}")
+        print(f"{'='*70}")
+        print(f"Parameters:")
+        for key, val in params.items():
+            print(f"  {key:15} = {val}")
+        
+        cmd = [
+            "python", "main.py",
+            "--molecules", '[{"name":"H2SO4","file":"monomer/opt-cisSA-B97-3c.xyz","count":1},'
+                           '{"name":"PT","file":"monomer/opt-PT-B97-3c.xyz","count":2}]',
+            "--dmin", str(params["dmin"]),
+            "--dmax", str(params["dmax"]),
+            "--lateral", str(params["lateral"]),
+            "--jitter_deg", str(params["jitter_deg"]),
+            "--nseeds", str(nseeds),
+            "--out", f"out_{config_name}"
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        output = result.stdout + result.stderr
+        
+        # Parse results
+        if "SUCCESS" in output or "Generated" in output:
+            print("\n✅ SUCCESS - All seeds generated")
+            if "Generated" in output:
+                for line in output.split('\n'):
+                    if "Generated" in line:
+                        print(f"   {line.strip()}")
+        else:
+            print("\n❌ FAILED - See errors below:")
+            print(output[-500:] if len(output) > 500 else output)
+        
+        return result.returncode == 0
+    
+    @staticmethod
+    def run_all_tests(nseeds: int = 15) -> dict:
+        """Run all configuration comparison tests."""
+        print("\n" + "="*70)
+        print("CLUSTER GEOMETRY CONFIGURATION COMPARISON TOOL")
+        print("="*70)
+        print("\nThis tool tests different parameter sets for molecule spacing.")
+        print("Generate different styles of clusters to find your preferred configuration.\n")
+        
+        results = {}
+        for config_name, config in ConfigurationComparison.TEST_CONFIGS.items():
+            success = ConfigurationComparison.run_test(config_name, config["params"], nseeds=nseeds)
+            results[config_name] = success
+        
+        return results
+    
+    @staticmethod
+    def print_summary(results: dict):
+        """Print test summary."""
+        print(f"\n{'='*70}")
+        print("SUMMARY")
+        print(f"{'='*70}")
+        
+        for config_name, success in results.items():
+            status = "✅ PASSED" if success else "❌ FAILED"
+            print(f"{config_name:15} {status}")
+        
+        print(f"\n{'='*70}")
+        print("OUTPUT LOCATIONS:")
+        print(f"{'='*70}")
+        print("Compact:   out_compact/seeds_H2SO4_combined.xyz")
+        print("Balanced:  out_balanced/seeds_H2SO4_combined.xyz")
+        print("Loose:     out_loose/seeds_H2SO4_combined.xyz")
+        print("\n💡 Open these files in a molecular viewer (Jmol, Avogadro, etc.)")
+        print("   to visually compare the different configurations.\n")
+
+
+# ============================================================================
+# MAIN TEST RUNNER
+# ============================================================================
+
+def main():
+    """Main test runner supporting multiple test modes."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description='Unified Test Suite for Sampling Engine',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+EXAMPLES:
+  python tests.py                    # Run all unit tests
+  python tests.py --molecules        # Run molecule support tests only
+  python tests.py --quick-config     # Quick config comparison (5 seeds)
+  python tests.py --full-comparison  # Full config comparison (15 seeds)
+  python tests.py -v                 # Verbose unit test output
+        """
+    )
+    
+    parser.add_argument('--molecules', action='store_true',
+                       help='Run molecule support tests only')
+    parser.add_argument('--quick-config', action='store_true',
+                       help='Run quick config comparison (5 seeds)')
+    parser.add_argument('--full-comparison', action='store_true',
+                       help='Run full config comparison (15 seeds)')
+    parser.add_argument('-v', '--verbose', action='store_true',
+                       help='Verbose test output')
+    
+    args = parser.parse_args()
+    
+    # Determine test mode
+    if args.molecules:
+        # Run only molecule support tests
+        loader = unittest.TestLoader()
+        suite = loader.loadTestsFromTestCase(TestMoleculeSupport)
+        runner = unittest.TextTestRunner(verbosity=2 if args.verbose else 1)
+        result = runner.run(suite)
+        return 0 if result.wasSuccessful() else 1
+        
+    elif args.quick_config or args.full_comparison:
+        # Run configuration comparison
+        nseeds = 5 if args.quick_config else 15
+        results = ConfigurationComparison.run_all_tests(nseeds=nseeds)
+        ConfigurationComparison.print_summary(results)
+        return 0 if all(results.values()) else 1
+        
+    else:
+        # Run all unit tests (default)
+        unittest.main(argv=[''], verbosity=2 if args.verbose else 2, exit=True)
+
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    sys.exit(main() if len(sys.argv) > 1 else 0) or unittest.main(verbosity=2)
