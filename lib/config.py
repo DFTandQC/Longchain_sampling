@@ -40,23 +40,35 @@ class ClusterConfig:
     max_trials_add: int = 2000
     
     # COM distance and positioning
-    # For single-component clusters: looser spacing (10–15 Å) is acceptable
-    # For mixed clusters: tighter spacing (7–11 Å) prevents natural dispersion
+    # For single-component clusters: looser spacing (10-15 Angstrom) is acceptable
+    # For mixed clusters: tighter spacing (7-11 Angstrom) prevents natural dispersion
     # Mixed clusters need ~20% tighter packing to maintain structural cohesion
-    dmin: float = 10.0  # Å (use 7.0 for mixed clusters via --dmin)
-    dmax: float = 15.0  # Å (use 11.0 for mixed clusters via --dmax)
-    lateral: float = 3.0  # Å (use 1.5 for mixed clusters via --lateral; tighter lateral displacement)
+    dmin: float = 10.0  # Angstrom (use 7.0 for mixed clusters via --dmin)
+    dmax: float = 15.0  # Angstrom (use 11.0 for mixed clusters via --dmax)
+    lateral: float = 3.0  # Angstrom (use 1.5 for mixed clusters via --lateral; tighter lateral displacement)
     jitter_deg: float = 25.0  # degrees
     
     # Restraint generation
     kO: int = 4  # Number of nearest heteroatoms to define head region
     pairs_per_edge: int = 8  # Restraint pairs per attachment edge
-    OO_target: float = 3.40  # Å, target distance between constraint atoms
+    OO_target: float = 3.40  # Angstrom, target distance between constraint atoms
     k_fc: float = 0.50  # Force constant for restraints
     
     # Seed generation
     nseeds: int = 200
     random_seed: int = 7
+    
+    # Post-generation filtering
+    enable_filter: bool = False
+    contact_cut: float = 3.8  # Angstrom
+    min_contacts: int = 20
+    max_rg: float = 25.0  # Angstrom
+    rmsd_dedup: float = None  # Optional: if None, skip dedup
+    keep_best: int = None  # Optional: limit final number saved
+    max_attempts: int = 10000  # Max attempts to generate nseeds valid seeds
+    core_dist_max: float = 8.0  # Angstrom, max PT core-to-core distance (if PT exists)
+    head_core_max: float = 6.0  # Angstrom, max non-PT head-to-PT-core distance (if PT exists)
+    pt_k: int = 8  # Number of O atoms for PT core definition
     
     def to_dict(self):
         """Convert to dictionary for easy access."""
@@ -116,15 +128,15 @@ def get_argument_parser():
 
     # Clash and placement
     ap.add_argument("--clash_cut", type=float, default=cfg_def.clash_cut,
-                    help="Reject if any inter-molecular atom distance < clash_cut (Å)")
+                    help="Reject if any inter-molecular atom distance < clash_cut (Angstrom)")
     ap.add_argument("--max_trials_add", type=int, default=cfg_def.max_trials_add,
                     help="Max trials to place each new monomer")
     ap.add_argument("--dmin", type=float, default=cfg_def.dmin,
-                    help="Min COM distance Å (default 10.0; consider 7.0 for compact mixed clusters)")
+                    help="Min COM distance Angstrom (default 10.0; consider 7.0 for compact mixed clusters)")
     ap.add_argument("--dmax", type=float, default=cfg_def.dmax,
-                    help="Max COM distance Å (default 15.0; consider 11.0 for compact mixed clusters)")
+                    help="Max COM distance Angstrom (default 15.0; consider 11.0 for compact mixed clusters)")
     ap.add_argument("--lateral", type=float, default=cfg_def.lateral,
-                    help="Max lateral offset Å (default 3.0; consider 1.5 for compact mixed clusters)")
+                    help="Max lateral offset Angstrom (default 3.0; consider 1.5 for compact mixed clusters)")
     ap.add_argument("--jitter_deg", type=float, default=cfg_def.jitter_deg,
                     help="Max angle jitter (deg)")
 
@@ -134,13 +146,35 @@ def get_argument_parser():
     ap.add_argument("--pairs_per_edge", type=int, default=cfg_def.pairs_per_edge,
                     help="Number of restraint pairs per attachment edge (heteroatom-based)")
     ap.add_argument("--OO_target", type=float, default=cfg_def.OO_target,
-                    help="Target distance (Å) for restraints (atom-pair based)")
+                    help="Target distance (Angstrom) for restraints (atom-pair based)")
     ap.add_argument("--k_fc", type=float, default=cfg_def.k_fc,
                     help="Force constant for distance restraints")
 
     # Random seed
     ap.add_argument("--seed", type=int, default=cfg_def.random_seed,
                     help="Random seed for reproducibility")
+
+    # Post-generation filtering
+    ap.add_argument("--enable_filter", action="store_true", default=cfg_def.enable_filter,
+                    help="Enable post-generation filtering of seeds")
+    ap.add_argument("--contact_cut", type=float, default=cfg_def.contact_cut,
+                    help="Contact cutoff distance in Angstrom (default 3.8)")
+    ap.add_argument("--min_contacts", type=int, default=cfg_def.min_contacts,
+                    help="Minimum number of inter-molecular contacts required (default 20)")
+    ap.add_argument("--max_rg", type=float, default=cfg_def.max_rg,
+                    help="Maximum allowed radius of gyration in Angstrom (default 25.0)")
+    ap.add_argument("--rmsd_dedup", type=float, default=cfg_def.rmsd_dedup,
+                    help="RMSD threshold for duplicate detection; if not set, dedup disabled (optional)")
+    ap.add_argument("--keep_best", type=int, default=cfg_def.keep_best,
+                    help="Limit output to best N seeds by contact count (optional)")
+    ap.add_argument("--max_attempts", type=int, default=cfg_def.max_attempts,
+                    help="Maximum generation attempts to produce nseeds valid seeds (default 10000)")
+    ap.add_argument("--core_dist_max", type=float, default=cfg_def.core_dist_max,
+                    help="Max PT core-to-core distance for mixed PT systems in Angstrom (default 8.0)")
+    ap.add_argument("--head_core_max", type=float, default=cfg_def.head_core_max,
+                    help="Max non-PT head-to-PT-core distance for mixed PT systems in Angstrom (default 6.0)")
+    ap.add_argument("--pt_k", type=int, default=cfg_def.pt_k,
+                    help="Number of O atoms for PT core definition (default 8)")
 
     return ap
 
@@ -196,5 +230,15 @@ def create_config_from_args(args) -> 'ClusterConfig':
         k_fc=args.k_fc,
         nseeds=args.nseeds,
         random_seed=args.seed,
+        enable_filter=args.enable_filter,
+        contact_cut=args.contact_cut,
+        min_contacts=args.min_contacts,
+        max_rg=args.max_rg,
+        rmsd_dedup=args.rmsd_dedup,
+        keep_best=args.keep_best,
+        max_attempts=args.max_attempts,
+        core_dist_max=args.core_dist_max,
+        head_core_max=args.head_core_max,
+        pt_k=args.pt_k,
     )
     return cfg

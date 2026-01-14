@@ -90,15 +90,15 @@ Examples (Multi-molecule):
     ap.add_argument("--N", type=int, default=cfg_def.N,
                     help="[Legacy] Monomers per cluster (default: %(default)s)")
     ap.add_argument("--clash_cut", type=float, default=cfg_def.clash_cut,
-                    help="Clash detection threshold Å (default: %(default)s)")
+                    help="Clash detection threshold Angstrom (default: %(default)s)")
     ap.add_argument("--max_trials_add", type=int, default=cfg_def.max_trials_add,
                     help="Max placement attempts per monomer (default: %(default)s)")
     ap.add_argument("--dmin", type=float, default=cfg_def.dmin,
-                    help="Min COM distance Å (default: %(default)s)")
+                    help="Min COM distance Angstrom (default: %(default)s)")
     ap.add_argument("--dmax", type=float, default=cfg_def.dmax,
-                    help="Max COM distance Å (default: %(default)s)")
+                    help="Max COM distance Angstrom (default: %(default)s)")
     ap.add_argument("--lateral", type=float, default=cfg_def.lateral,
-                    help="Max lateral offset Å (default: %(default)s)")
+                    help="Max lateral offset Angstrom (default: %(default)s)")
     ap.add_argument("--jitter_deg", type=float, default=cfg_def.jitter_deg,
                     help="Angle jitter degrees (default: %(default)s)")
     ap.add_argument("--seed", type=int, default=cfg_def.random_seed,
@@ -107,6 +107,29 @@ Examples (Multi-molecule):
                     help="Worker threads for extraction (default: %(default)s)")
     ap.add_argument("--sampling-workers", type=int, default=1,
                     help="Worker processes for parallel sampling (default: %(default)s)")
+    
+    # Filtering arguments
+    ap.add_argument("--enable_filter", action="store_true", default=cfg_def.enable_filter,
+                    help="Enable post-generation filtering of seeds")
+    ap.add_argument("--contact_cut", type=float, default=cfg_def.contact_cut,
+                    help="Contact cutoff distance in Angstrom (default: %(default)s)")
+    ap.add_argument("--min_contacts", type=int, default=cfg_def.min_contacts,
+                    help="Minimum inter-molecular contacts required (default: %(default)s)")
+    ap.add_argument("--max_rg", type=float, default=cfg_def.max_rg,
+                    help="Maximum radius of gyration in Angstrom (default: %(default)s)")
+    ap.add_argument("--rmsd_dedup", type=float, default=cfg_def.rmsd_dedup,
+                    help="RMSD threshold for deduplication (optional)")
+    ap.add_argument("--keep_best", type=int, default=cfg_def.keep_best,
+                    help="Keep best N seeds by contact count (optional)")
+    ap.add_argument("--max_attempts", type=int, default=cfg_def.max_attempts,
+                    help="Max generation attempts for nseeds valid seeds (default: %(default)s)")
+    ap.add_argument("--core_dist_max", type=float, default=cfg_def.core_dist_max,
+                    help="Max PT core-to-core distance in Angstrom (default: %(default)s)")
+    ap.add_argument("--head_core_max", type=float, default=cfg_def.head_core_max,
+                    help="Max head-to-PT-core distance in Angstrom (default: %(default)s)")
+    ap.add_argument("--pt_k", type=int, default=cfg_def.pt_k,
+                    help="Number of O atoms for PT core definition (default: %(default)s)")
+    
     args = ap.parse_args()
 
     # Build sampling engine argument list
@@ -121,6 +144,23 @@ Examples (Multi-molecule):
         "--jitter_deg", str(args.jitter_deg),
         "--seed", str(args.seed),
     ]
+    
+    # Add filter arguments if specified
+    if args.enable_filter:
+        sampling_args.append("--enable_filter")
+    sampling_args.extend([
+        "--contact_cut", str(args.contact_cut),
+        "--min_contacts", str(args.min_contacts),
+        "--max_rg", str(args.max_rg),
+        "--max_attempts", str(args.max_attempts),
+        "--core_dist_max", str(args.core_dist_max),
+        "--head_core_max", str(args.head_core_max),
+        "--pt_k", str(args.pt_k),
+    ])
+    if args.rmsd_dedup is not None:
+        sampling_args.extend(["--rmsd_dedup", str(args.rmsd_dedup)])
+    if args.keep_best is not None:
+        sampling_args.extend(["--keep_best", str(args.keep_best)])
     
     # Handle multi-molecule vs legacy mode
     if args.config:

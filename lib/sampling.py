@@ -563,6 +563,154 @@ def compute_global_pt_core_centroid(cluster_list, molecule_indices, molecules_da
     
     return np.mean(pt_cores, axis=0)
 
+# -------- filtering functions --------
+def radius_of_gyration(X):
+    """Compute radius of gyration for atomic coordinates."""
+    center = np.mean(X, axis=0)
+    return np.sqrt(np.mean(np.sum((X - center)**2, axis=1)))
+
+def count_inter_molecular_contacts(X, elems, molecule_indices, contact_cut=3.8):
+    """
+    Count inter-molecular atom pairs within contact_cut distance.
+    
+    Args:
+        X: (N, 3) atomic coordinates
+        elems: element symbols
+        molecule_indices: list mapping each atom to molecule index
+        contact_cut: contact distance threshold in Angstrom
+    
+    Returns:
+        Number of inter-molecular contact pairs
+    """
+    n_contacts = 0
+    
+    for i in range(len(X)):
+        for j in range(i+1, len(X)):
+            if molecule_indices[i] != molecule_indices[j]:
+                dist = np.linalg.norm(X[i] - X[j])
+                if dist < contact_cut:
+                    n_contacts += 1
+    
+    return n_contacts
+
+def compute_rmsd_fingerprint(X):
+    """
+    Compute a structural fingerprint (histogram of inter-atomic distances).
+    Returns a hashable tuple for duplicate detection.
+    """
+    dists = []
+    for i in range(len(X)):
+        for j in range(i+1, len(X)):
+            dists.append(np.linalg.norm(X[i] - X[j]))
+    
+    dists = np.array(dists)
+    # Histogram with 0.5 Å bins from 0 to 30 Å
+    hist, _ = np.histogram(dists, bins=np.arange(0, 30.5, 0.5))
+    return tuple(hist)
+
+def filter_accept(cluster_list, molecule_indices, molecules_data, cfg, seen_fingerprints=None):
+    """
+    Check if a generated cluster seed passes all quality filters.
+    
+    Args:
+        cluster_list: list of coordinate arrays for each placed molecule
+        molecule_indices: list indicating which molecule type each entry is
+        molecules_data: list of (MoleculeSpec, elems, X_template) tuples
+        cfg: ClusterConfig with filter parameters
+        seen_fingerprints: set of already-seen fingerprints for dedup (updated in-place)
+    
+    Returns:
+        (pass: bool, reject_reason: str or None)
+    """
+    if not cfg.enable_filter:
+        return True, None
+    
+    if seen_fingerprints is None:
+        seen_fingerprints = set()
+    
+    # Concatenate all atoms
+    X_list = []
+    elems_list = []
+    mol_idx_expanded = []
+    
+    for i, X_mol in enumerate(cluster_list):
+        X_list.append(X_mol)
+        mol_spec, elems, _ = molecules_data[molecule_indices[i]]
+        elems_list.extend(elems)
+        mol_idx_expanded.extend([i] * len(X_mol))
+    
+    X_all = np.vstack(X_list)
+    
+    # Check 1: Radius of gyration
+    rg = radius_of_gyration(X_all)
+    if rg > cfg.max_rg:
+        return False, f"rg_too_large(rg={rg:.2f})"
+    
+    # Check 2: Inter-molecular contacts
+    n_contacts = count_inter_molecular_contacts(X_all, elems_list, mol_idx_expanded, cfg.contact_cut)
+    if n_contacts < cfg.min_contacts:
+        return False, f"insufficient_contacts(n={n_contacts})"
+    
+    # Check 3: Duplicate detection (RMSD fingerprint)
+    if cfg.rmsd_dedup is not None:
+        fp = compute_rmsd_fingerprint(X_all)
+        if fp in seen_fingerprints:
+            return False, "duplicate"
+        seen_fingerprints.add(fp)
+    
+    # Check 4: PT-specific rules (if applicable)
+    # Only check if we have mixed molecules or multiple PT molecules with PT core placement enabled
+    if len(molecules_data) > 1 or (len(cluster_list) > 1 and any(m[0].name == "PT" for m in molecules_data)):
+        pt_idx = None
+        for idx, (mol_spec, _, _) in enumerate(molecules_data):
+            if mol_spec.name == "PT":
+                pt_idx = idx
+                break
+        
+        if pt_idx is not None:
+            # Compute all PT core positions
+            pt_cores = []
+            pt_head_positions = []
+            
+            for i, X_mol in enumerate(cluster_list):
+                if molecule_indices[i] == pt_idx:
+                    mol_spec, elems, _ = molecules_data[pt_idx]
+                    pt_core = compute_pt_ester_core(elems, X_mol, k=cfg.pt_k)
+                    pt_cores.append(pt_core)
+                    
+                    # Get head region (nearest kO heteroatoms)
+                    head_indices = get_heteroatom_head_region(elems, X_mol, k=cfg.kO)
+                    if head_indices:
+                        head_coords = X_mol[head_indices]
+                        head_centroid = np.mean(head_coords, axis=0)
+                        pt_head_positions.append(head_centroid)
+            
+            # PT core-to-core distance check
+            if len(pt_cores) > 1:
+                for i in range(len(pt_cores)):
+                    for j in range(i+1, len(pt_cores)):
+                        dist = np.linalg.norm(pt_cores[i] - pt_cores[j])
+                        if dist > cfg.core_dist_max:
+                            return False, f"pt_core_dist_too_large(d={dist:.2f})"
+            
+            # Non-PT head-to-PT-core distance check (for mixed systems)
+            if pt_idx is not None and len(molecules_data) > 1 and len(pt_cores) > 0:
+                pt_core_global = np.mean(pt_cores, axis=0)
+                
+                for i, X_mol in enumerate(cluster_list):
+                    if molecule_indices[i] != pt_idx:
+                        # This is a non-PT molecule; check its head to PT core
+                        mol_spec, elems, _ = molecules_data[molecule_indices[i]]
+                        head_indices = get_heteroatom_head_region(elems, X_mol, k=cfg.kO)
+                        if head_indices:
+                            head_coords = X_mol[head_indices]
+                            head_centroid = np.mean(head_coords, axis=0)
+                            dist = np.linalg.norm(head_centroid - pt_core_global)
+                            if dist > cfg.head_core_max:
+                                return False, f"head_core_dist_too_large(d={dist:.2f})"
+    
+    return True, None
+
 # ---------------- single seed generation (worker function) ----------------
 def _check_only_pt_molecules(molecules_data):
     """
@@ -852,37 +1000,143 @@ def run_with_args_parsed(args, sampling_workers=None):
     results = []
     n_ok = 0
     
-    # Use multiprocessing for sampling if workers > 1
-    if sampling_workers and sampling_workers > 1:
-        print(f"[SAMPLING] Using {sampling_workers} worker processes")
-        with concurrent.futures.ProcessPoolExecutor(max_workers=sampling_workers) as ex:
-            futures = {
-                ex.submit(_generate_single_seed, s, cfg, molecules_data, cfg.random_seed * 1000): s
-                for s in range(1, cfg.nseeds + 1)
-            }
-            for fut in concurrent.futures.as_completed(futures):
-                s = futures[fut]
-                try:
-                    result = fut.result()
-                    if result is not None:
-                        results.append(result)
-                        n_ok += 1
-                except Exception as e:
-                    print(f"[WARN] seed {s:04d} failed: {e}")
-    else:
-        # Single-threaded fallback
-        rng = np.random.default_rng(cfg.random_seed)
-        for s in range(1, cfg.nseeds + 1):
-            result = _generate_single_seed(s, cfg, molecules_data, cfg.random_seed * 1000)
-            if result is None:
-                print(f"[WARN] seed {s:04d} failed (could not place all molecules without clashes).")
-                continue
-            results.append(result)
-            n_ok += 1
+    # Initialize filter deduplication set if needed
+    seen_fingerprints = set() if cfg.enable_filter and cfg.rmsd_dedup is not None else None
+    
+    # Track filter statistics
+    filter_stats = {
+        'rejected_by_rg': 0,
+        'rejected_by_contacts': 0,
+        'rejected_by_duplicate': 0,
+        'accepted': 0
+    }
+    
+    # Retry loop: generate until we have nseeds valid seeds or max_attempts reached
+    attempt = 0
+    max_attempts = cfg.max_attempts if cfg.enable_filter else 1
+    nseeds_target = cfg.nseeds
+    
+    while n_ok < nseeds_target and attempt < max_attempts:
+        attempt += 1
+        
+        # Generate seeds for this batch
+        batch_results = []
+        
+        # Use multiprocessing for sampling if workers > 1
+        if sampling_workers and sampling_workers > 1:
+            if attempt == 1:
+                print(f"[SAMPLING] Using {sampling_workers} worker processes")
+            
+            # For this batch, try to generate nseeds_target - n_ok more seeds
+            seeds_to_generate = min(nseeds_target - n_ok, 100)  # Batch up to 100 per round
+            
+            with concurrent.futures.ProcessPoolExecutor(max_workers=sampling_workers) as ex:
+                futures = {
+                    ex.submit(_generate_single_seed, s + attempt*10000, cfg, molecules_data, cfg.random_seed * 1000 + attempt): s + attempt*10000
+                    for s in range(1, seeds_to_generate + 1)
+                }
+                for fut in concurrent.futures.as_completed(futures):
+                    s = futures[fut]
+                    try:
+                        result = fut.result()
+                        if result is not None:
+                            batch_results.append(result)
+                    except Exception as e:
+                        pass
+        else:
+            # Single-threaded fallback
+            rng = np.random.default_rng(cfg.random_seed + attempt)
+            seeds_to_generate = min(nseeds_target - n_ok, 100)
+            
+            for s in range(1, seeds_to_generate + 1):
+                result = _generate_single_seed(s + attempt*10000, cfg, molecules_data, cfg.random_seed * 1000 + attempt)
+                if result is None:
+                    continue
+                batch_results.append(result)
+        
+        # Filter batch results
+        for result in batch_results:
+            if n_ok >= nseeds_target:
+                break
+            
+            # Extract cluster info for filtering
+            X_all = result["X_all"]
+            elems_all = result["elems_all"]
+            molecule_indices = result["molecule_indices"]
+            
+            # Perform filtering
+            cluster_list = []
+            current_idx = 0
+            for mol_idx in molecule_indices:
+                mol_spec, elems, _ = molecules_data[mol_idx]
+                n_atoms = len(elems)
+                cluster_list.append(X_all[current_idx:current_idx + n_atoms])
+                current_idx += n_atoms
+            
+            passes_filter, reject_reason = filter_accept(
+                cluster_list, molecule_indices, molecules_data, cfg, seen_fingerprints
+            )
+            
+            if passes_filter:
+                results.append(result)
+                filter_stats['accepted'] += 1
+                n_ok += 1
+            else:
+                # Track rejection reason
+                if reject_reason:
+                    if 'rg_too_large' in reject_reason:
+                        filter_stats['rejected_by_rg'] += 1
+                    elif 'insufficient_contacts' in reject_reason:
+                        filter_stats['rejected_by_contacts'] += 1
+                    elif 'duplicate' in reject_reason:
+                        filter_stats['rejected_by_duplicate'] += 1
+                    elif 'pt_' in reject_reason or 'core_dist' in reject_reason or 'head_core' in reject_reason:
+                        filter_stats['rejected_by_rg'] += 1  # PT checks are geometry-based
+        
+        if cfg.enable_filter and attempt < max_attempts and n_ok < nseeds_target:
+            print(f"[FILTERING] Attempt {attempt}: {n_ok}/{nseeds_target} valid seeds accepted", end="")
+            if reject_reason:
+                print(f" (last rejection: {reject_reason})")
+            else:
+                print()
+    
+    # Report filtering statistics
+    if cfg.enable_filter:
+        print(f"\n[FILTER STATS]")
+        print(f"  Accepted: {filter_stats['accepted']}")
+        print(f"  Rejected (Rg): {filter_stats['rejected_by_rg']}")
+        print(f"  Rejected (Contacts): {filter_stats['rejected_by_contacts']}")
+        print(f"  Rejected (Duplicate): {filter_stats['rejected_by_duplicate']}")
+        if n_ok < nseeds_target:
+            print(f"  Warning: Only {n_ok}/{nseeds_target} valid seeds after {attempt} attempts")
     
     # Write results to disk
     frames = []
     comments = []
+    
+    # Apply keep_best filter if specified
+    if cfg.keep_best is not None and len(results) > cfg.keep_best:
+        # Sort by number of contacts (descending)
+        scored_results = []
+        for result in results:
+            X_all = result["X_all"]
+            elems_all = result["elems_all"]
+            molecule_indices = result["molecule_indices"]
+            
+            cluster_list = []
+            current_idx = 0
+            for mol_idx in molecule_indices:
+                mol_spec, elems, _ = molecules_data[mol_idx]
+                n_atoms = len(elems)
+                cluster_list.append(X_all[current_idx:current_idx + n_atoms])
+                current_idx += n_atoms
+            
+            n_contacts = count_inter_molecular_contacts(X_all, elems_all, molecule_indices, cfg.contact_cut)
+            scored_results.append((n_contacts, result))
+        
+        scored_results.sort(reverse=True, key=lambda x: x[0])
+        results = [r[1] for r in scored_results[:cfg.keep_best]]
+    
     for result in results:
         s = result["s"]
         composition = result["composition"]
