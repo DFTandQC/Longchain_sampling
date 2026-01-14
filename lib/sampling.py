@@ -454,9 +454,25 @@ def compute_molecule_radii(molecules_data):
 
 
 # ---------------- single seed generation (worker function) ----------------
+def _check_only_pt_molecules(molecules_data):
+    """
+    Check if all molecules are PT (Platinum cluster) molecules.
+    Returns True only if there's a single molecule type named 'PT'.
+    """
+    if len(molecules_data) != 1:
+        return False
+    
+    mol_spec, elems, X = molecules_data[0]
+    return mol_spec.name.upper() == "PT"
+
+
 def _generate_single_seed(s, cfg, molecules_data, rng_seed_offset):
     """
     Generate a single cluster seed with mixed molecules.
+    
+    Two modes:
+    1. Pure PT mode: If only PT molecules, place them head-to-head
+    2. Mixed mode: PT atoms placed first, then other molecules as close as possible
     
     Args:
         s: seed number
@@ -469,76 +485,164 @@ def _generate_single_seed(s, cfg, molecules_data, rng_seed_offset):
     """
     rng = np.random.default_rng(rng_seed_offset + s)
     
+    # Check placement mode
+    only_pt = _check_only_pt_molecules(molecules_data)
+    
     # Build cluster by sequentially placing molecules
     cluster_list = []
     attach_edges = []
     molecule_indices = []  # track which molecule type each entry in cluster belongs to
     
-    # Start with first molecule of first type
-    mol_spec, elems, X = molecules_data[0]
+    # Find PT molecule index if it exists
+    pt_idx = None
+    for i, (spec, _, _) in enumerate(molecules_data):
+        if spec.name.upper() == "PT":
+            pt_idx = i
+            break
+    
+    # Determine first molecule to place
+    if pt_idx is not None and not only_pt:
+        # Mixed mode: start with PT molecule
+        first_idx = pt_idx
+    else:
+        # Pure PT or no PT: start with first molecule
+        first_idx = 0
+    
+    # Start with first molecule to place
+    mol_spec, elems, X = molecules_data[first_idx]
     X0 = X - com(X)
     cluster_list.append(X0)
-    molecule_indices.append(0)
+    molecule_indices.append(first_idx)
     
     # Track how many of each type have been placed
     placed_by_type = [0] * len(molecules_data)
-    placed_by_type[0] = 1
+    placed_by_type[first_idx] = 1
     
     # Place remaining molecules according to spec
     total_needed = sum(spec.count for spec, _, _ in molecules_data)
     count_placed = 1
     
-    while count_placed < total_needed:
-        # Find first incomplete molecule type
-        mol_idx = None
-        for i in range(len(molecules_data)):
-            if placed_by_type[i] < molecules_data[i][0].count:
-                mol_idx = i
-                break
+    if only_pt:
+        # Pure PT mode: place PT molecules using standard head-insert rule
+        while count_placed < total_needed:
+            mol_idx = 0  # Only one molecule type
+            mol_spec, elems, X = molecules_data[mol_idx]
+            
+            ok = False
+            for _ in range(cfg.max_trials_add):
+                anchor_idx = int(rng.integers(0, len(cluster_list)))
+                anchor_X = cluster_list[anchor_idx]
+                anchor_elems = elems
+                
+                Xnew, info = place_head_insert(
+                    elems, X, anchor_elems, anchor_X, rng,
+                    d_range=(cfg.dmin, cfg.dmax),
+                    lateral_range=cfg.lateral,
+                    angle_jitter_deg=cfg.jitter_deg
+                )
+                if not clashes_with_cluster(Xnew, cluster_list, cfg.clash_cut):
+                    cluster_list.append(Xnew)
+                    molecule_indices.append(mol_idx)
+                    attach_edges.append((anchor_idx, len(cluster_list) - 1))
+                    placed_by_type[mol_idx] += 1
+                    ok = True
+                    count_placed += 1
+                    break
+            
+            if not ok:
+                return None  # fail
+    
+    else:
+        # Mixed mode: place PT molecules first, then other molecules close to PT
+        # Continue placing PT molecules
+        while placed_by_type[pt_idx] < molecules_data[pt_idx][0].count:
+            mol_spec, elems, X = molecules_data[pt_idx]
+            
+            ok = False
+            for _ in range(cfg.max_trials_add):
+                # Try anchoring to existing PT molecules first
+                pt_anchors = [idx for idx in range(len(cluster_list)) 
+                             if molecule_indices[idx] == pt_idx]
+                
+                if pt_anchors:
+                    anchor_idx = rng.choice(pt_anchors)
+                else:
+                    anchor_idx = int(rng.integers(0, len(cluster_list)))
+                
+                anchor_X = cluster_list[anchor_idx]
+                anchor_mol_idx = molecule_indices[anchor_idx]
+                anchor_elems = molecules_data[anchor_mol_idx][1]
+                
+                Xnew, info = place_head_insert(
+                    elems, X, anchor_elems, anchor_X, rng,
+                    d_range=(cfg.dmin, cfg.dmax),
+                    lateral_range=cfg.lateral,
+                    angle_jitter_deg=cfg.jitter_deg
+                )
+                if not clashes_with_cluster(Xnew, cluster_list, cfg.clash_cut):
+                    cluster_list.append(Xnew)
+                    molecule_indices.append(pt_idx)
+                    attach_edges.append((anchor_idx, len(cluster_list) - 1))
+                    placed_by_type[pt_idx] += 1
+                    ok = True
+                    count_placed += 1
+                    break
+            
+            if not ok:
+                return None  # fail
         
-        if mol_idx is None:
-            break  # All molecules placed
-        
-        mol_spec, elems, X = molecules_data[mol_idx]
-        
-        ok = False
-        for _ in range(cfg.max_trials_add):
-            anchor_idx = int(rng.integers(0, len(cluster_list)))
-            anchor_X = cluster_list[anchor_idx]
-            anchor_mol_idx = molecule_indices[anchor_idx]
-            anchor_elems = molecules_data[anchor_mol_idx][1]  # Get element array of anchor
-            # Adaptive distance scaling based on molecular sizes (radii)
-            # Compute radii if not already computed
-            if 'mol_radii' not in locals():
-                mol_radii = compute_molecule_radii(molecules_data)
-                # reference radius is mean radius across molecule types
-                r_ref = float(np.mean(mol_radii)) if len(mol_radii) > 0 else 1.0
-
-            r_anchor = mol_radii[anchor_mol_idx]
-            r_new = mol_radii[mol_idx]
-            size_scale = (r_anchor + r_new) / (2.0 * r_ref) if r_ref > 0 else 1.0
-
-            dmin_pair = float(cfg.dmin) * size_scale
-            dmax_pair = float(cfg.dmax) * size_scale
-            lateral_pair = float(cfg.lateral) * size_scale
-
-            Xnew, info = place_head_insert(
-                elems, X, anchor_elems, anchor_X, rng,
-                d_range=(dmin_pair, dmax_pair),
-                lateral_range=lateral_pair,
-                angle_jitter_deg=cfg.jitter_deg
-            )
-            if not clashes_with_cluster(Xnew, cluster_list, cfg.clash_cut):
-                cluster_list.append(Xnew)
-                molecule_indices.append(mol_idx)
-                attach_edges.append((anchor_idx, len(cluster_list) - 1))
-                placed_by_type[mol_idx] += 1
-                ok = True
-                count_placed += 1
-                break
-        
-        if not ok:
-            return None  # fail
+        # Then place non-PT molecules close to PT
+        while count_placed < total_needed:
+            # Find first incomplete non-PT molecule type
+            mol_idx = None
+            for i in range(len(molecules_data)):
+                if i != pt_idx and placed_by_type[i] < molecules_data[i][0].count:
+                    mol_idx = i
+                    break
+            
+            if mol_idx is None:
+                break  # All molecules placed
+            
+            mol_spec, elems, X = molecules_data[mol_idx]
+            
+            ok = False
+            for _ in range(cfg.max_trials_add):
+                # Prefer anchoring to PT molecules
+                pt_anchors = [idx for idx in range(len(cluster_list)) 
+                             if molecule_indices[idx] == pt_idx]
+                
+                if pt_anchors:
+                    anchor_idx = rng.choice(pt_anchors)
+                else:
+                    anchor_idx = int(rng.integers(0, len(cluster_list)))
+                
+                anchor_X = cluster_list[anchor_idx]
+                anchor_mol_idx = molecule_indices[anchor_idx]
+                anchor_elems = molecules_data[anchor_mol_idx][1]
+                
+                # Use slightly tighter distances for non-PT molecules (70-90% of standard)
+                # to keep them close to PT but avoid clashes
+                tighter_dmin = float(cfg.dmin) * 0.75
+                tighter_dmax = float(cfg.dmax) * 0.85
+                tighter_lateral = float(cfg.lateral) * 0.75
+                
+                Xnew, info = place_head_insert(
+                    elems, X, anchor_elems, anchor_X, rng,
+                    d_range=(tighter_dmin, tighter_dmax),
+                    lateral_range=tighter_lateral,
+                    angle_jitter_deg=cfg.jitter_deg
+                )
+                if not clashes_with_cluster(Xnew, cluster_list, cfg.clash_cut):
+                    cluster_list.append(Xnew)
+                    molecule_indices.append(mol_idx)
+                    attach_edges.append((anchor_idx, len(cluster_list) - 1))
+                    placed_by_type[mol_idx] += 1
+                    ok = True
+                    count_placed += 1
+                    break
+            
+            if not ok:
+                return None  # fail
     
     # Assemble mixed cluster
     elems_all = []
