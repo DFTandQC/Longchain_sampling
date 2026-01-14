@@ -4,7 +4,7 @@
   
   "_presets": {
     "balanced": {
-      "description": "Balanced (8Å spacing) - RECOMMENDED for most applications",
+      "description": "Balanced (8Angstrom spacing) - RECOMMENDED for most applications",
       "comment": "Default choice: 85% success rate, balances tight packing and diversity",
       "dmin": 6.0,
       "dmax": 10.0,
@@ -12,7 +12,7 @@
       "jitter_deg": 25.0
     },
     "compact": {
-      "description": "Compact (6Å spacing) - for strong interactions / tight packing",
+      "description": "Compact (6Angstrom spacing) - for strong interactions / tight packing",
       "comment": "For acid-base or H-bonded systems. 70% success rate, tighter clustering",
       "dmin": 4.0,
       "dmax": 8.0,
@@ -20,7 +20,7 @@
       "jitter_deg": 20.0
     },
     "loose": {
-      "description": "Loose (12Å spacing) - for weak interactions / initial testing",
+      "description": "Loose (12Angstrom spacing) - for weak interactions / initial testing",
       "comment": "Original preset. 95% success rate, most dispersed. Good for validation tests",
       "dmin": 10.0,
       "dmax": 15.0,
@@ -29,25 +29,55 @@
     }
   },
 
-  "comment_molecules": "Add your molecules here. Supports O (acids), N (amines), S (thiols), and C (hydrocarbons)",
+  "comment_molecules": "Add your molecules here. Supports O (acids), N (amines), S (thiols), and C (hydrocarbons). Set enabled=false to skip a molecule.",
   "molecules": [
-    {
-      "name": "H2SO4",
-      "file": "monomer/opt-cisSA-B97-3c.xyz",
-      "count": 1,
-      "description": "Sulfuric acid monomer"
-    },
     {
       "name": "PT",
       "file": "monomer/opt-PT-B97-3c.xyz",
       "count": 2,
+      "enabled": true,
       "description": "Platinum cluster unit (quantity 2)"
+    },
+    {
+      "name": "H2SO4",
+      "file": "monomer/opt-cisSA-B97-3c.xyz",
+      "count": 1,
+      "enabled": true,
+      "description": "Sulfuric acid monomer (cis configuration)"
+    },
+    {
+      "name": "trans-SA",
+      "file": "monomer/opt-transSA-B97-3c.xyz",
+      "count": 1,
+      "enabled": true,
+      "description": "Sulfuric acid monomer (trans configuration)"
+    },
+    {
+      "name": "NO",
+      "file": "monomer/opt-NO-B97-3c.xyz",
+      "count": 1,
+      "enabled": true,
+      "description": "Nitrogen monoxide"
+    },
+    {
+      "name": "NO2",
+      "file": "monomer/opt-NO2-B97-3c.xyz",
+      "count": 1,
+      "enabled": true,
+      "description": "Nitrogen dioxide"
+    },
+    {
+      "name": "SO2",
+      "file": "monomer/opt-SO2-B97-3c.xyz",
+      "count": 1,
+      "enabled": true,
+      "description": "Sulfur dioxide"
     }
   ],
 
   "comment_sampling": "Standard sampling parameters. For tight/loose/custom spacing, adjust dmin/dmax",
   "sampling_parameters": {
-    "comment": "Using BALANCED preset (8Å avg spacing). To change: modify values below or use --dmin/--dmax flags",
+    "comment": "Using BALANCED preset (8Angstrom avg spacing). To change: modify values below or use --dmin/--dmax flags",
     
     "dmin": 6.0,
     "dmax": 10.0,
@@ -63,7 +93,10 @@
   },
 
   "_usage_examples": {
-    "balanced_default": "python main.py --config config.json --nseeds 100",
+    "list_available_monomers": "python main.py --list-monomers",
+    "default": "python main.py --config config.json --nseeds 100",
+    "select_molecules": "python main.py --use \"PT,H2SO4,NO2\" --nseeds 100",
+    "override_counts": "python main.py --use \"PT,H2SO4,NO,NO2\" --counts \"PT=2,H2SO4=1,NO=2,NO2=1\" --nseeds 200",
     "compact_tight": "python main.py --config config.json --dmin 4.0 --dmax 8.0 --lateral 1.0 --nseeds 100",
     "loose_dispersed": "python main.py --config config.json --dmin 10.0 --dmax 15.0 --lateral 3.0 --nseeds 100",
     "custom_parameters": "python main.py --config config.json --dmin 5.0 --dmax 9.0 --lateral 1.5 --nseeds 50"

@@ -16,6 +16,13 @@ Usage (Multi-molecule via JSON config):
 
 Usage (Multi-molecule via command line):
     python main.py --molecules '[{"name":"PT","file":"opt-PT.xyz","count":2},{"name":"H2SO4","file":"h2so4.xyz","count":1}]' --nseeds 100
+
+Usage (List available monomers):
+    python main.py --list-monomers
+
+Usage (Select molecules and override counts):
+    python main.py --use "PT,H2SO4,NO2" --nseeds 100
+    python main.py --use "PT,H2SO4,NO,NO2" --counts "PT=2,H2SO4=1,NO=2,NO2=1" --nseeds 200
 """
 from pathlib import Path
 import subprocess
@@ -23,7 +30,7 @@ import sys
 import glob
 import argparse
 
-from lib.config import ClusterConfig, get_argument_parser
+from lib.config import ClusterConfig, get_argument_parser, load_molecules_from_args, list_available_monomers
 from lib.extractor import split_multiframe
 import importlib
 import concurrent.futures
@@ -70,17 +77,25 @@ Examples (Legacy - single molecule):
   python main.py --nseeds 20 --dmin 8 --dmax 12  # Custom distance range
 
 Examples (Multi-molecule):
-  python main.py --config cluster_config.json --nseeds 100
-  python main.py --molecules '[{"name":"PT","file":"opt-PT.xyz","count":2},{"name":"H2SO4","file":"h2so4.xyz","count":1}]' --nseeds 100
+  python main.py --config config.json --nseeds 100
+  python main.py --use "PT,H2SO4,NO2" --nseeds 100
+  python main.py --use "PT,H2SO4,NO,NO2" --counts "PT=2,H2SO4=1,NO=2,NO2=1" --nseeds 200
+  python main.py --list-monomers
         """
     )
     
     # Reuse config defaults
     cfg_def = ClusterConfig()
+    ap.add_argument("--list-monomers", action="store_true",
+                    help="List all available monomers in monomer/ directory and exit")
     ap.add_argument("--config", type=str, default="config.json",
                     help="JSON config file for multi-molecule clusters (default: config.json with presets)")
     ap.add_argument("--molecules", type=str, default=None,
                     help="Molecule spec as JSON string (overrides --mono and --N)")
+    ap.add_argument("--use", type=str, default=None,
+                    help="Specify which molecules to sample (comma-separated, e.g., \"PT,H2SO4,NO2\")")
+    ap.add_argument("--counts", type=str, default=None,
+                    help="Override molecule counts (e.g., \"PT=2,H2SO4=1,NO=3\")")
     ap.add_argument("--mono", default=cfg_def.mono_file,
                     help="[Legacy] Monomer xyz file (default: %(default)s)")
     ap.add_argument("--out", default=cfg_def.out_dir,
@@ -132,6 +147,37 @@ Examples (Multi-molecule):
     
     args = ap.parse_args()
 
+    # Handle --list-monomers
+    if args.list_monomers:
+        list_available_monomers()
+        return
+
+    # Load and display molecules
+    print("[MAIN] Loading molecule configuration...")
+    try:
+        molecules = load_molecules_from_args(args)
+        if not molecules:
+            print("[ERROR] Failed to load molecules")
+            return 1
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        return 1
+    
+    # Display final molecule composition
+    print("\n[MOLECULE COMPOSITION]")
+    active_mols = [m for m in molecules if m.enabled]
+    disabled_mols = [m for m in molecules if not m.enabled]
+    
+    if active_mols:
+        print("  Enabled:")
+        for mol in active_mols:
+            print(f"    {mol.name:15s} x {mol.count}  ({mol.file})")
+    
+    if disabled_mols:
+        print("  Disabled:")
+        for mol in disabled_mols:
+            print(f"    {mol.name:15s} (not sampling)")
+    
     # Build sampling engine argument list
     sampling_args = [
         "--out", args.out,
@@ -162,20 +208,23 @@ Examples (Multi-molecule):
     if args.keep_best is not None:
         sampling_args.extend(["--keep_best", str(args.keep_best)])
     
-    # Handle multi-molecule vs legacy mode
-    if args.config:
-        sampling_args.extend(["--config", args.config])
-        print(f"[MAIN] Using multi-molecule config: {args.config}")
-    elif args.molecules:
-        sampling_args.extend(["--molecules", args.molecules])
-        print(f"[MAIN] Using molecules from command line")
+    # Build molecules list (only enabled ones)
+    import json
+    active_molecules = [
+        {
+            "name": m.name,
+            "file": m.file,
+            "count": m.count
+        }
+        for m in active_mols
+    ]
+    
+    if active_molecules:
+        sampling_args.extend(["--molecules", json.dumps(active_molecules)])
+        print(f"\n[MAIN] Sampling {len(active_mols)} molecule type(s)")
     else:
-        # Legacy mode
-        sampling_args.extend([
-            "--mono", args.mono,
-            "--N", str(args.N)
-        ])
-        print(f"[MAIN] Using legacy single-molecule mode: {args.mono} (N={args.N})")
+        print("[ERROR] No molecules enabled for sampling")
+        return 1
 
     # Step 1: Run sampling engine
     print("\n" + "="*70)
@@ -210,12 +259,12 @@ Examples (Multi-molecule):
                 except Exception as e:
                     print(f"[ERROR] splitting {p.name}: {e}")
                     continue
-                print(f"[EXTRACT] {p.name} → {n} files in {outdir}")
+                print(f"[EXTRACT] {p.name} -> {n} files in {outdir}")
                 total += n
     else:
         for ptn_file in ptn_files:
             n, outdir = split_multiframe(ptn_file, outdir=out_dir / "seeds_xyz")
-            print(f"[EXTRACT] {ptn_file.name} → {n} files in {outdir}")
+            print(f"[EXTRACT] {ptn_file.name} -> {n} files in {outdir}")
             total += n
 
     print("\n" + "="*70)
@@ -227,3 +276,4 @@ Examples (Multi-molecule):
 
 if __name__ == "__main__":
     main()
+

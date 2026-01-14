@@ -5,9 +5,111 @@ Supports mixed clusters with different molecular types.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 import argparse
 import json
+from pathlib import Path
+import re
+
+
+def resolve_monomer_file(name: str, file_hint: Optional[str] = None) -> str:
+    """
+    Resolve the actual monomer file path.
+    
+    Args:
+        name: Molecule name (e.g., "PT", "trans-SA", "H2SO4")
+        file_hint: Expected file path from config.json
+    
+    Returns:
+        Full path to the monomer file
+    
+    Raises:
+        FileNotFoundError: If no matching file found
+    """
+    # If file_hint exists and file is found, use it
+    if file_hint and Path(file_hint).exists():
+        return file_hint
+    
+    # Scan monomer/ directory for matching files
+    monomer_dir = Path("monomer")
+    if not monomer_dir.exists():
+        raise FileNotFoundError(f"monomer/ directory not found")
+    
+    xyz_files = list(monomer_dir.glob("*.xyz"))
+    if not xyz_files:
+        raise FileNotFoundError(f"No .xyz files found in monomer/ directory")
+    
+    # Normalize name for matching (handle trans-SA -> transSA)
+    name_normalized = name.lower().replace("-", "").replace("_", "")
+    
+    candidates = []
+    for xyz_file in xyz_files:
+        filename_lower = xyz_file.stem.lower()
+        # Remove common prefixes
+        filename_clean = re.sub(r"^(opt_|opt-|optimized_|optimized-)", "", filename_lower)
+        # Remove trailing suffixes like -B97-3c
+        filename_base = re.sub(r"(-B97-3c|-B3LYP|-PBE|_B97-3c|_B3LYP|_PBE).*$", "", filename_clean)
+        
+        # Normalize for comparison
+        filename_normalized = filename_base.replace("-", "").replace("_", "")
+        
+        if name_normalized == filename_normalized:
+            # Score: prefer files with "opt" prefix and longer names (more specific)
+            score = (int("opt" in filename_lower), len(filename_base))
+            candidates.append((score, xyz_file))
+    
+    if len(candidates) == 0:
+        available = [f.stem for f in xyz_files]
+        raise FileNotFoundError(
+            f"No monomer file found for '{name}' in monomer/\n"
+            f"Expected file like: monomer/opt-{name}-B97-3c.xyz\n"
+            f"Available files: {', '.join(available)}\n"
+            f"Add the file to monomer/ or specify 'file' in config.json"
+        )
+    
+    if len(candidates) > 1:
+        candidates.sort(reverse=True)
+        if candidates[0][0] != candidates[1][0]:
+            # Clear winner based on score
+            return str(candidates[0][1])
+        else:
+            # Ambiguous matches
+            matching_files = [str(c[1]) for c in candidates]
+            raise FileNotFoundError(
+                f"Ambiguous files for molecule '{name}':\n"
+                f"  {chr(10).join(matching_files)}\n"
+                f"Please specify 'file' explicitly in config.json"
+            )
+    
+    return str(candidates[0][1])
+
+
+def list_available_monomers():
+    """
+    Scan monomer/ directory and print available molecules.
+    Returns True if successful, False otherwise.
+    """
+    monomer_dir = Path("monomer")
+    if not monomer_dir.exists():
+        print("[ERROR] monomer/ directory not found")
+        return False
+    
+    xyz_files = sorted(monomer_dir.glob("*.xyz"))
+    if not xyz_files:
+        print("[ERROR] No .xyz files found in monomer/")
+        return False
+    
+    print("\n[AVAILABLE MONOMERS]")
+    for xyz_file in xyz_files:
+        filename = xyz_file.stem
+        # Try to infer molecule name
+        filename_clean = re.sub(r"^(opt_|opt-|optimized_|optimized-)", "", filename, flags=re.IGNORECASE)
+        filename_clean = re.sub(r"(-B97-3c|-B3LYP|-PBE|_B97-3c|_B3LYP|_PBE).*$", "", filename_clean, flags=re.IGNORECASE)
+        print(f"  {filename_clean:20s} <- {filename}.xyz")
+    
+    print("\nUse --use \"MOLECULE1,MOLECULE2,...\" to select molecules for sampling")
+    print("Use --counts \"MOLECULE=count,...\" to override molecule counts")
+    return True
 
 
 @dataclass
@@ -16,6 +118,7 @@ class MoleculeSpec:
     name: str              # Name of molecule type (e.g., "PT", "H2SO4")
     file: str              # Path to monomer XYZ file
     count: int             # Number of this molecule in each cluster
+    enabled: bool = True   # Whether this molecule participates in sampling
 
 
 @dataclass
@@ -28,7 +131,7 @@ class ClusterConfig:
     # Molecule composition (new multi-molecule support)
     # Default: single PT molecule with count=2 (backward compatibility)
     molecules: List[MoleculeSpec] = field(default_factory=lambda: [
-        MoleculeSpec(name="PT", file="monomer/opt-PT-B97-3c.xyz", count=2)
+        MoleculeSpec(name="PT", file="monomer/opt-PT-B97-3c.xyz", count=2, enabled=True)
     ])
     
     # Legacy single-molecule support (for backward compatibility)
@@ -36,7 +139,7 @@ class ClusterConfig:
     N: int = 2  # Number of monomers per cluster (deprecated, use molecules instead)
     
     # Clash detection
-    clash_cut: float = 1.20  # Å
+    clash_cut: float = 1.20  # Angstrom
     max_trials_add: int = 2000
     
     # COM distance and positioning
@@ -121,6 +224,12 @@ def get_argument_parser():
                     help="JSON config file specifying molecule composition (overrides --mono and --N)")
     ap.add_argument("--molecules", type=str, default=None,
                     help='Molecule spec as JSON string e.g. "[{\"name\":\"PT\",\"file\":\"opt-PT.xyz\",\"count\":2}]"')
+    ap.add_argument("--list-monomers", action="store_true",
+                    help="List all available monomers in monomer/ directory and exit")
+    ap.add_argument("--use", type=str, default=None,
+                    help="Specify which molecules participate in sampling (comma-separated names, e.g., \"PT,H2SO4,NO2\")")
+    ap.add_argument("--counts", type=str, default=None,
+                    help="Override molecule counts (e.g., \"PT=2,H2SO4=1,NO=3\")")
 
     # Cluster size (legacy for single-molecule mode)
     ap.add_argument("--N", type=int, default=cfg_def.N,
@@ -184,29 +293,75 @@ def load_molecules_from_args(args) -> List[MoleculeSpec]:
     """Parse molecule configuration from command-line arguments."""
     # Priority: --config > --molecules > legacy (--mono + --N)
     
+    molecules = None
+    
     if hasattr(args, 'config') and args.config:
         # Load from JSON config file
-        with open(args.config, 'r') as f:
-            cfg = json.load(f)
-        molecules = [
-            MoleculeSpec(name=m['name'], file=m['file'], count=m['count'])
-            for m in cfg.get('molecules', [])
-        ]
-        return molecules if molecules else None
+        try:
+            with open(args.config, 'r') as f:
+                cfg = json.load(f)
+            molecules = [
+                MoleculeSpec(
+                    name=m['name'],
+                    file=resolve_monomer_file(m['name'], m.get('file')),
+                    count=m.get('count', 1),
+                    enabled=m.get('enabled', True)
+                )
+                for m in cfg.get('molecules', [])
+            ]
+        except Exception as e:
+            print(f"[ERROR] Failed to load config.json: {e}")
+            return None
     
-    if hasattr(args, 'molecules') and args.molecules:
+    elif hasattr(args, 'molecules') and args.molecules:
         # Parse from JSON string
-        mol_list = json.loads(args.molecules)
-        molecules = [
-            MoleculeSpec(name=m['name'], file=m['file'], count=m['count'])
-            for m in mol_list
-        ]
-        return molecules if molecules else None
+        try:
+            mol_list = json.loads(args.molecules)
+            molecules = [
+                MoleculeSpec(
+                    name=m['name'],
+                    file=resolve_monomer_file(m['name'], m.get('file')),
+                    count=m.get('count', 1),
+                    enabled=m.get('enabled', True)
+                )
+                for m in mol_list
+            ]
+        except Exception as e:
+            print(f"[ERROR] Failed to parse --molecules: {e}")
+            return None
     
-    # Legacy mode: single molecule with count N
-    mono = getattr(args, 'mono', 'opt-PT-B97-3c.xyz')
-    N = getattr(args, 'N', 2)
-    return [MoleculeSpec(name="PT", file=mono, count=N)]
+    else:
+        # Legacy mode: single molecule with count N
+        mono = getattr(args, 'mono', 'opt-PT-B97-3c.xyz')
+        N = getattr(args, 'N', 2)
+        molecules = [MoleculeSpec(name="PT", file=mono, count=N, enabled=True)]
+    
+    if not molecules:
+        return None
+    
+    # Apply --use filter (enable only specified molecules)
+    if hasattr(args, 'use') and args.use:
+        use_set = set(name.strip() for name in args.use.split(','))
+        for mol in molecules:
+            mol.enabled = mol.name in use_set
+    
+    # Apply --counts overrides
+    if hasattr(args, 'counts') and args.counts:
+        count_dict = {}
+        for pair in args.counts.split(','):
+            parts = pair.strip().split('=')
+            if len(parts) == 2:
+                name, count = parts[0].strip(), parts[1].strip()
+                try:
+                    count_dict[name] = int(count)
+                except ValueError:
+                    print(f"[WARN] Invalid count for {name}: {count}")
+        
+        for mol in molecules:
+            if mol.name in count_dict:
+                mol.count = count_dict[mol.name]
+    
+    return molecules
 
 
 def create_config_from_args(args) -> 'ClusterConfig':
