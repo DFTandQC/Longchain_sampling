@@ -77,8 +77,8 @@ Examples (Multi-molecule):
     
     # Reuse config defaults
     cfg_def = ClusterConfig()
-    ap.add_argument("--config", type=str, default="balanced_config.json",
-                    help="JSON config file for multi-molecule clusters (default: balanced_config.json - recommended for most uses)")
+    ap.add_argument("--config", type=str, default="unified_config.json",
+                    help="JSON config file for multi-molecule clusters (default: unified_config.json with presets)")
     ap.add_argument("--molecules", type=str, default=None,
                     help="Molecule spec as JSON string (overrides --mono and --N)")
     ap.add_argument("--mono", default=cfg_def.mono_file,

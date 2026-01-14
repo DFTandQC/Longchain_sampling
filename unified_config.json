@@ -1,0 +1,71 @@
+{
+  "description": "Unified multi-molecule cluster sampling configuration with multiple presets",
+  "comment": "Select your preset below or create a custom configuration. Use: python main.py --config unified_config.json --preset balanced --nseeds 100",
+  
+  "_presets": {
+    "balanced": {
+      "description": "Balanced (8Å spacing) - RECOMMENDED for most applications",
+      "comment": "Default choice: 85% success rate, balances tight packing and diversity",
+      "dmin": 6.0,
+      "dmax": 10.0,
+      "lateral": 2.0,
+      "jitter_deg": 25.0
+    },
+    "compact": {
+      "description": "Compact (6Å spacing) - for strong interactions / tight packing",
+      "comment": "For acid-base or H-bonded systems. 70% success rate, tighter clustering",
+      "dmin": 4.0,
+      "dmax": 8.0,
+      "lateral": 1.0,
+      "jitter_deg": 20.0
+    },
+    "loose": {
+      "description": "Loose (12Å spacing) - for weak interactions / initial testing",
+      "comment": "Original preset. 95% success rate, most dispersed. Good for validation tests",
+      "dmin": 10.0,
+      "dmax": 15.0,
+      "lateral": 3.0,
+      "jitter_deg": 25.0
+    }
+  },
+
+  "comment_molecules": "Add your molecules here. Supports O (acids), N (amines), S (thiols), and C (hydrocarbons)",
+  "molecules": [
+    {
+      "name": "H2SO4",
+      "file": "monomer/opt-cisSA-B97-3c.xyz",
+      "count": 1,
+      "description": "Sulfuric acid monomer"
+    },
+    {
+      "name": "PT",
+      "file": "monomer/opt-PT-B97-3c.xyz",
+      "count": 2,
+      "description": "Platinum cluster unit (quantity 2)"
+    }
+  ],
+
+  "comment_sampling": "Standard sampling parameters. For tight/loose/custom spacing, adjust dmin/dmax",
+  "sampling_parameters": {
+    "comment": "Using BALANCED preset (8Å avg spacing). To change: modify values below or use --dmin/--dmax flags",
+    
+    "dmin": 6.0,
+    "dmax": 10.0,
+    "lateral": 2.0,
+    "jitter_deg": 25.0,
+    
+    "clash_cut": 1.20,
+    "max_trials_add": 2000,
+    "kO": 4,
+    "pairs_per_edge": 8,
+    "OO_target": 3.40,
+    "k_fc": 0.50
+  },
+
+  "_usage_examples": {
+    "balanced_default": "python main.py --config unified_config.json --nseeds 100",
+    "compact_tight": "python main.py --config unified_config.json --dmin 4.0 --dmax 8.0 --lateral 1.0 --nseeds 100",
+    "loose_dispersed": "python main.py --config unified_config.json --dmin 10.0 --dmax 15.0 --lateral 3.0 --nseeds 100",
+    "custom_parameters": "python main.py --config unified_config.json --dmin 5.0 --dmax 9.0 --lateral 1.5 --nseeds 50"
+  }
+}

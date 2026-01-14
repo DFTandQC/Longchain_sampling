@@ -286,35 +286,33 @@ class TestConfigLoading(unittest.TestCase):
             Path(config_path).unlink()
             
     def test_preset_configs_balance_compact_loose(self):
-        """Test that the three preset configs have correct spacing."""
-        # These paths should exist and be readable
+        """Test that unified config has correct spacing hierarchy."""
+        # The unified config should exist and contain all presets
         base_dir = Path(__file__).parent
-        compact = base_dir / "compact_config.json"
-        balanced = base_dir / "balanced_config.json"
-        molecule = base_dir / "molecule_config.json"
+        unified = base_dir / "unified_config.json"
         
-        self.assertTrue(compact.exists(), f"compact_config.json not found at {compact}")
-        self.assertTrue(balanced.exists(), f"balanced_config.json not found at {balanced}")
-        self.assertTrue(molecule.exists(), f"molecule_config.json not found at {molecule}")
+        self.assertTrue(unified.exists(), f"unified_config.json not found at {unified}")
         
-        with open(compact) as f:
-            compact_cfg = json.load(f)
-        with open(balanced) as f:
-            balanced_cfg = json.load(f)
-        with open(molecule) as f:
-            molecule_cfg = json.load(f)
+        with open(unified) as f:
+            config = json.load(f)
+        
+        # Verify presets exist
+        self.assertIn('_presets', config)
+        self.assertIn('balanced', config['_presets'])
+        self.assertIn('compact', config['_presets'])
+        self.assertIn('loose', config['_presets'])
         
         # Verify spacing hierarchy
-        compact_spacing = (compact_cfg['sampling_parameters']['dmin'] + 
-                          compact_cfg['sampling_parameters']['dmax']) / 2
-        balanced_spacing = (balanced_cfg['sampling_parameters']['dmin'] + 
-                           balanced_cfg['sampling_parameters']['dmax']) / 2
-        molecule_spacing = (molecule_cfg['sampling_parameters']['dmin'] + 
-                           molecule_cfg['sampling_parameters']['dmax']) / 2
+        balanced_spacing = (config['_presets']['balanced']['dmin'] + 
+                           config['_presets']['balanced']['dmax']) / 2
+        compact_spacing = (config['_presets']['compact']['dmin'] + 
+                          config['_presets']['compact']['dmax']) / 2
+        loose_spacing = (config['_presets']['loose']['dmin'] + 
+                        config['_presets']['loose']['dmax']) / 2
         
-        # Compact < Balanced < Molecule (loose)
+        # Compact < Balanced < Loose
         self.assertLess(compact_spacing, balanced_spacing)
-        self.assertLess(balanced_spacing, molecule_spacing)
+        self.assertLess(balanced_spacing, loose_spacing)
 
 
 class TestConstraintGeneration(unittest.TestCase):
