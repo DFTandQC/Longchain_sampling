@@ -243,13 +243,13 @@ def assemble_cluster_xyz(mono_elems, cluster_list):
     return elems_all, X_all
 
 # ---------------- main ----------------
-def main():
+def run_with_args(argv=None):
     ap = get_argument_parser()
-    args = ap.parse_args()
-    
+    args = ap.parse_args(argv)
+
     # Create config from parsed arguments
     cfg = ClusterConfig.from_args(args)
-    
+
     rng = np.random.default_rng(cfg.random_seed)
 
     mono_elems, mono_X, _ = read_xyz(cfg.mono_file)
@@ -314,8 +314,10 @@ def main():
     print(f"Done. Generated {n_ok} cluster seeds in {seeds_dir.resolve()}")
     print("Also wrote multi-frame xyz grouped by N: out/PTN_seeds_N{N}.xyz")
 
-if __name__ == "__main__":
-    main()
+
+def main():
+    return run_with_args()
+
 
 # Support running as: python -m lib.sampling
 if __name__ == "__main__":

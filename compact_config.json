@@ -1,0 +1,30 @@
+{
+  "description": "Compact (6Å spacing) - for strong interactions / tight packing",
+  "comment": "For acid-base or H-bonded systems. 70% success rate, tighter clustering",
+  "molecules": [
+    {
+      "name": "H2SO4",
+      "file": "monomer/opt-cisSA-B97-3c.xyz",
+      "count": 1,
+      "description": "Sulfuric acid monomer"
+    },
+    {
+      "name": "PT",
+      "file": "monomer/opt-PT-B97-3c.xyz",
+      "count": 2,
+      "description": "Platinum cluster unit, quantity 2"
+    }
+  ],
+  "sampling_parameters": {
+    "clash_cut": 1.20,
+    "max_trials_add": 2000,
+    "dmin": 4.0,
+    "dmax": 8.0,
+    "lateral": 1.0,
+    "jitter_deg": 20.0,
+    "kO": 4,
+    "pairs_per_edge": 8,
+    "OO_target": 3.40,
+    "k_fc": 0.50
+  }
+}

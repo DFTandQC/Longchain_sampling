@@ -1,0 +1,30 @@
+{
+  "description": "Balanced (8Å spacing) - RECOMMENDED for most applications",
+  "comment": "Default choice: 85% success rate, balances tight packing and diversity",
+  "molecules": [
+    {
+      "name": "H2SO4",
+      "file": "monomer/opt-cisSA-B97-3c.xyz",
+      "count": 1,
+      "description": "Sulfuric acid monomer"
+    },
+    {
+      "name": "PT",
+      "file": "monomer/opt-PT-B97-3c.xyz",
+      "count": 2,
+      "description": "Platinum cluster unit, quantity 2"
+    }
+  ],
+  "sampling_parameters": {
+    "clash_cut": 1.20,
+    "max_trials_add": 2000,
+    "dmin": 6.0,
+    "dmax": 10.0,
+    "lateral": 2.0,
+    "jitter_deg": 25.0,
+    "kO": 4,
+    "pairs_per_edge": 8,
+    "OO_target": 3.40,
+    "k_fc": 0.50
+  }
+}

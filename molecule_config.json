@@ -1,0 +1,30 @@
+{
+  "description": "Loose (12Å spacing) - for weak interactions / initial testing",
+  "comment": "Original preset. 95% success rate, most dispersed. Good for validation tests",
+  "molecules": [
+    {
+      "name": "H2SO4",
+      "file": "monomer/opt-cisSA-B97-3c.xyz",
+      "count": 1,
+      "description": "Sulfuric acid monomer"
+    },
+    {
+      "name": "PT",
+      "file": "monomer/opt-PT-B97-3c.xyz",
+      "count": 2,
+      "description": "Platinum cluster unit, quantity 2"
+    }
+  ],
+  "sampling_parameters": {
+    "clash_cut": 1.20,
+    "max_trials_add": 2000,
+    "dmin": 10.0,
+    "dmax": 15.0,
+    "lateral": 3.0,
+    "jitter_deg": 25.0,
+    "kO": 4,
+    "pairs_per_edge": 8,
+    "OO_target": 3.40,
+    "k_fc": 0.50
+  }
+}
