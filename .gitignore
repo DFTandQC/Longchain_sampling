@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Output files (keep structure, ignore content)
+out/seeds/*.xyz
+out/seeds/*.xcontrol
+out/seeds_xyz/*.xyz
+out/*.xyz
+out/*.log
+
+# Test outputs
+test/*.log
+test/__pycache__/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Documentation build
+docs/_build/
+
+# Temporary files
+*.tmp
+*.bak
+.cache/

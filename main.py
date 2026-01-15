@@ -23,12 +23,17 @@ Usage (List available monomers):
 Usage (Select molecules and override counts):
     python main.py --use "PT,H2SO4,NO2" --nseeds 100
     python main.py --use "PT,H2SO4,NO,NO2" --counts "PT=2,H2SO4=1,NO=2,NO2=1" --nseeds 200
+
+Usage (Parallel sampling - run 5 independent jobs):
+    python main.py --nseeds 100 --parallel-jobs 5
+    python main.py --config config.json --nseeds 100 --parallel-jobs 3
 """
 from pathlib import Path
 import subprocess
 import sys
 import glob
 import argparse
+import shutil
 
 from lib.config import ClusterConfig, get_argument_parser, load_molecules_from_args, list_available_monomers
 from lib.extractor import split_multiframe
@@ -66,6 +71,96 @@ def run_sampling_engine(args_list, sampling_workers=1):
         return res.returncode
 
 
+def run_single_parallel_job(job_id, base_args, output_dir):
+    """Run a single sampling job for parallel mode"""
+    try:
+        # Create output directory
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        
+        # Build command with modified output directory
+        cmd = [sys.executable, "main.py"]
+        
+        # Add all arguments except --parallel-jobs and --out
+        skip_next = False
+        for i, arg in enumerate(base_args):
+            if skip_next:
+                skip_next = False
+                continue
+            if arg == "--parallel-jobs":
+                skip_next = True
+                continue
+            if arg == "--out":
+                skip_next = True
+                continue
+            cmd.append(arg)
+        
+        # Add output directory
+        cmd.extend(["--out", output_dir])
+        
+        print(f"\n[PARALLEL Job {job_id}] Starting in: {output_dir}")
+        print(f"[PARALLEL Job {job_id}] Command: {' '.join(cmd)}")
+        
+        # Run subprocess
+        result = subprocess.run(cmd, capture_output=False, text=True)
+        
+        if result.returncode == 0:
+            print(f"[PARALLEL Job {job_id}] ✓ Completed successfully")
+            return True
+        else:
+            print(f"[PARALLEL Job {job_id}] ✗ Failed with return code {result.returncode}")
+            return False
+            
+    except Exception as e:
+        print(f"[PARALLEL Job {job_id}] ✗ Exception: {e}")
+        return False
+
+
+def merge_parallel_seeds_xyz(base_out, num_jobs):
+    """
+    Merge seeds_xyz from all parallel jobs into a unified folder structure.
+    Preserves original file structure with job-specific subfolders.
+    """
+    base_out = Path(base_out)
+    merged_dir = base_out / "seeds_xyz_combined"
+    
+    print("\n" + "="*70)
+    print("MERGING PARALLEL JOBS - seeds_xyz")
+    print("="*70)
+    
+    merged_dir.mkdir(parents=True, exist_ok=True)
+    
+    total_files = 0
+    
+    for job_id in range(1, num_jobs + 1):
+        job_folder = base_out / f"sampling_{job_id:02d}"
+        source_dir = job_folder / "seeds_xyz"
+        
+        if not source_dir.exists():
+            print(f"[MERGE] Job {job_id}: No seeds_xyz found (skipping)")
+            continue
+        
+        # Create job-specific subfolder in merged directory
+        dest_dir = merged_dir / f"sampling_{job_id:02d}"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Copy all files from this job's seeds_xyz
+        xyz_files = list(source_dir.glob("*.xyz"))
+        
+        for src_file in xyz_files:
+            dest_file = dest_dir / src_file.name
+            try:
+                shutil.copy2(src_file, dest_file)
+                total_files += 1
+            except Exception as e:
+                print(f"[MERGE] Error copying {src_file.name}: {e}")
+        
+        print(f"[MERGE] Job {job_id}: Copied {len(xyz_files)} files to {dest_dir.name}/")
+    
+    print(f"\n[MERGE] ✓ Total files merged: {total_files}")
+    print(f"[MERGE] Combined output: {merged_dir.resolve()}")
+    print("="*70)
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Generate multi-molecule cluster seeds: sample geometries then extract into individual files",
@@ -81,6 +176,11 @@ Examples (Multi-molecule):
   python main.py --use "PT,H2SO4,NO2" --nseeds 100
   python main.py --use "PT,H2SO4,NO,NO2" --counts "PT=2,H2SO4=1,NO=2,NO2=1" --nseeds 200
   python main.py --list-monomers
+
+Examples (Parallel sampling):
+  python main.py --nseeds 100 --parallel-jobs 5          # 5 parallel jobs (default)
+  python main.py --config config.json --nseeds 100 --parallel-jobs 3
+  python main.py --use "PT,H2SO4" --nseeds 50 --parallel-jobs 10
         """
     )
     
@@ -123,6 +223,10 @@ Examples (Multi-molecule):
     ap.add_argument("--sampling-workers", type=int, default=1,
                     help="Worker processes for parallel sampling (default: %(default)s)")
     
+    # Parallel jobs argument
+    ap.add_argument("--parallel-jobs", type=int, default=1,
+                    help="Number of parallel sampling jobs (default: %(default)s, set >1 to run multiple independent sampling runs)")
+    
     # Filtering arguments
     ap.add_argument("--enable_filter", action="store_true", default=cfg_def.enable_filter,
                     help="Enable post-generation filtering of seeds")
@@ -151,6 +255,54 @@ Examples (Multi-molecule):
     if args.list_monomers:
         list_available_monomers()
         return
+
+    # Handle parallel jobs mode
+    if args.parallel_jobs > 1:
+        print("\n" + "="*70)
+        print(f"PARALLEL SAMPLING MODE: Running {args.parallel_jobs} independent jobs")
+        print("="*70)
+        
+        base_out = Path(args.out)
+        base_out.mkdir(parents=True, exist_ok=True)
+        
+        # Prepare job arguments
+        base_args = sys.argv[1:]  # Get original command line arguments
+        
+        jobs = []
+        for job_id in range(1, args.parallel_jobs + 1):
+            folder_name = f"sampling_{job_id:02d}"
+            output_dir = str(base_out / folder_name)
+            jobs.append((job_id, base_args, output_dir))
+        
+        # Run jobs sequentially (or in parallel with ThreadPoolExecutor if desired)
+        results = []
+        print(f"Starting {args.parallel_jobs} sampling jobs...\n")
+        
+        # Use ProcessPoolExecutor or run sequentially
+        # Sequential approach for stability (each job is a full Python process):
+        for job_id, base_args_item, output_dir in jobs:
+            success = run_single_parallel_job(job_id, base_args_item, output_dir)
+            results.append((job_id, success, output_dir))
+        
+        # Print summary
+        print("\n" + "="*70)
+        print("PARALLEL JOBS SUMMARY")
+        print("="*70)
+        successful = sum(1 for _, s, _ in results if s)
+        failed = len(results) - successful
+        print(f"Successful: {successful}/{args.parallel_jobs}")
+        print(f"Failed: {failed}/{args.parallel_jobs}")
+        print("\nOutput locations:")
+        for job_id, success, output_dir in results:
+            status = "✓" if success else "✗"
+            print(f"  {status} Job {job_id}: {output_dir}")
+        print("="*70)
+        
+        # Merge seeds_xyz from all jobs if all were successful
+        if failed == 0:
+            merge_parallel_seeds_xyz(args.out, args.parallel_jobs)
+        
+        return 0 if failed == 0 else 1
 
     # Load and display molecules
     print("[MAIN] Loading molecule configuration...")
@@ -245,7 +397,7 @@ Examples (Multi-molecule):
     if not ptn_files:
         print(f"[WARN] No multi-frame seed files found in {out_dir}")
         print(f"Individual seed files should already be in {out_dir / 'seeds'}")
-        return
+        return 0
 
     total = 0
     # Use threads for I/O-bound extraction when workers > 1
@@ -273,7 +425,9 @@ Examples (Multi-molecule):
         print(f"Output directory: {(out_dir / 'seeds_xyz').resolve()}")
     else:
         print(f"SUCCESS: Seed files generated in {(out_dir / 'seeds').resolve()}")
+    
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
 

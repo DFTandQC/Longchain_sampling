@@ -1,0 +1,4 @@
+# Molecular Cluster Sampling System - Python Dependencies
+# Install: pip install -r requirements.txt
+
+numpy>=1.20.0

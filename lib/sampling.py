@@ -207,6 +207,18 @@ def pick_nearest_atoms_to_head(elems, X, head_point, k=4):
     d = np.linalg.norm(X - head_point, axis=1)
     return np.argsort(d)[:k]
 
+
+def get_heteroatom_head_region(elems, X, k=4):
+    """Return indices (list) of up to k atoms nearest to the heteroatom head point.
+
+    Prefers O/N/S atoms; falls back to all atoms if heteroatoms are absent.
+    """
+    try:
+        head_pt = head_point_from_atoms(elems, X)
+    except Exception:
+        head_pt = com(X)
+    return list(pick_nearest_atoms_to_head(elems, X, head_pt, k=k))
+
 # Backward compatibility alias
 def pick_nearest_O_indices(elems, X, head_point, k=4):
     """
@@ -804,9 +816,18 @@ def _generate_single_seed(s, cfg, molecules_data, rng_seed_offset):
                 # Use PT core-to-core placement if both are PT
                 if anchor_mol_idx == pt_idx:
                     anchor_core = compute_pt_ester_core(elems, anchor_X, k=getattr(cfg, 'pt_k', 8))
+                    # Keep PT cores close; make dmin/dmax compatible with core_dist_max to avoid impossible ranges
+                    if cfg.core_dist_max > 0:
+                        dmax_pt = min(cfg.dmax, cfg.core_dist_max)
+                        dmin_pt = min(cfg.dmin, cfg.core_dist_max * 0.9)
+                        if dmin_pt > dmax_pt:
+                            dmin_pt = max(0.5 * dmax_pt, 0.1)  # keep a sane lower bound
+                    else:
+                        dmin_pt = cfg.dmin
+                        dmax_pt = cfg.dmax
                     Xnew, info = place_pt_to_pt_core(
                         elems, X, anchor_X, anchor_core, rng,
-                        d_range=(cfg.dmin, cfg.dmax),
+                        d_range=(dmin_pt, dmax_pt),
                         lateral_range=cfg.lateral,
                         angle_jitter_deg=cfg.jitter_deg,
                         pt_k=getattr(cfg, 'pt_k', 8)
@@ -820,6 +841,18 @@ def _generate_single_seed(s, cfg, molecules_data, rng_seed_offset):
                         lateral_range=cfg.lateral,
                         angle_jitter_deg=cfg.jitter_deg
                     )
+                
+                # PT sanity: new PT core must be close to all existing PT cores
+                new_core = compute_pt_ester_core(elems, Xnew, k=getattr(cfg, 'pt_k', 8))
+                too_far = False
+                for idx_existing, X_existing in enumerate(cluster_list):
+                    if molecule_indices[idx_existing] == pt_idx:
+                        existing_core = compute_pt_ester_core(molecules_data[pt_idx][1], X_existing, k=getattr(cfg, 'pt_k', 8))
+                        if np.linalg.norm(new_core - existing_core) > cfg.core_dist_max:
+                            too_far = True
+                            break
+                if too_far:
+                    continue
                 
                 if not clashes_with_cluster(Xnew, cluster_list, cfg.clash_cut):
                     cluster_list.append(Xnew)
@@ -880,6 +913,23 @@ def _generate_single_seed(s, cfg, molecules_data, rng_seed_offset):
                         lateral_range=tighter_lateral,
                         angle_jitter_deg=cfg.jitter_deg
                     )
+                    
+                    # Ensure non-PT head is close to PT core centroid
+                    pt_cores_now = []
+                    for idx_existing, X_existing in enumerate(cluster_list):
+                        if molecule_indices[idx_existing] == pt_idx:
+                            existing_core = compute_pt_ester_core(molecules_data[pt_idx][1], X_existing, k=getattr(cfg, 'pt_k', 8))
+                            pt_cores_now.append(existing_core)
+                    if pt_cores_now:
+                        pt_core_global = np.mean(pt_cores_now, axis=0)
+                        head_idx = get_heteroatom_head_region(elems, Xnew, k=cfg.kO)
+                        if head_idx:
+                            head_centroid = Xnew[head_idx].mean(axis=0)
+                        else:
+                            head_centroid = com(Xnew)
+                        if np.linalg.norm(head_centroid - pt_core_global) > cfg.head_core_max:
+                            continue
+                    
                     if not clashes_with_cluster(Xnew, cluster_list, cfg.clash_cut):
                         cluster_list.append(Xnew)
                         molecule_indices.append(mol_idx)
@@ -951,13 +1001,10 @@ def _generate_single_seed(s, cfg, molecules_data, rng_seed_offset):
         kO=cfg.kO, n_pairs_per_edge=cfg.pairs_per_edge, rng=rng
     )
     
-    # Create composition string (actual counts from this seed)
-    comp_parts = []
-    for spec, _, _ in molecules_data:
-        count = placed_by_type[molecules_data.index((spec, molecules_data[[m[0] for m in molecules_data].index(spec)][1], molecules_data[[m[0] for m in molecules_data].index(spec)][2]))]
-    
-    # Simpler approach: just use the counts from cfg.molecules
-    comp_str = "_".join([f"{spec.name}{spec.count}" for spec in cfg.molecules])
+    # Create composition string based on actually placed counts
+    comp_str = "_".join([
+        f"{molecules_data[i][0].name}{placed_by_type[i]}" for i in range(len(molecules_data))
+    ])
     
     return {
         "s": s,
