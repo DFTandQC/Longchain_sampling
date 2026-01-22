@@ -71,7 +71,7 @@ def run_sampling_engine(args_list, sampling_workers=1):
         return res.returncode
 
 
-def run_single_parallel_job(job_id, base_args, output_dir):
+def run_single_parallel_job(job_id, base_args, output_dir, base_seed):
     """Run a single sampling job for parallel mode"""
     try:
         # Create output directory
@@ -80,7 +80,7 @@ def run_single_parallel_job(job_id, base_args, output_dir):
         # Build command with modified output directory
         cmd = [sys.executable, "main.py"]
         
-        # Add all arguments except --parallel-jobs and --out
+        # Add all arguments except --parallel-jobs, --out, and --seed
         skip_next = False
         for i, arg in enumerate(base_args):
             if skip_next:
@@ -92,7 +92,14 @@ def run_single_parallel_job(job_id, base_args, output_dir):
             if arg == "--out":
                 skip_next = True
                 continue
+            if arg == "--seed":
+                skip_next = True
+                continue
             cmd.append(arg)
+        
+        # Add unique seed for this parallel job
+        unique_seed = base_seed + job_id * 100000
+        cmd.extend(["--seed", str(unique_seed)])
         
         # Add output directory
         cmd.extend(["--out", output_dir])
@@ -276,12 +283,13 @@ Examples (Parallel sampling):
         
         # Run jobs sequentially (or in parallel with ThreadPoolExecutor if desired)
         results = []
-        print(f"Starting {args.parallel_jobs} sampling jobs...\n")
+        print(f"Starting {args.parallel_jobs} sampling jobs with independent random seeds...\n")
+        print(f"Base seed: {args.seed}, Job seeds: {args.seed + 100000}, {args.seed + 200000}, ...\n")
         
         # Use ProcessPoolExecutor or run sequentially
         # Sequential approach for stability (each job is a full Python process):
         for job_id, base_args_item, output_dir in jobs:
-            success = run_single_parallel_job(job_id, base_args_item, output_dir)
+            success = run_single_parallel_job(job_id, base_args_item, output_dir, args.seed)
             results.append((job_id, success, output_dir))
         
         # Print summary
